@@ -1,112 +1,73 @@
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
 #include <stdint.h>
- 
-#pragma comment(lib, "ws2_32.lib")
- 
-#define BUF_SIZE 64
- 
-int main(int argc, char *argv[]) {
-    const char *server_ip   = (argc > 1) ? argv[1] : "127.0.0.1";
-    int         server_port = (argc > 2) ? atoi(argv[2]) : 5006;
- 
-    /* ── Winsock initialiseren ── */
-    WSADATA wsa;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        fprintf(stderr, "WSAStartup mislukt: %d\n", WSAGetLastError());
-        return 1;
-    }
- 
-    /* ── Socket aanmaken ── */
-    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (sock == INVALID_SOCKET) {
-        fprintf(stderr, "socket() fout: %d\n", WSAGetLastError());
-        WSACleanup(); return 1;
-    }
- 
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port   = htons(server_port);
+#include <winsock2.h>
 
-    // Gebruik inet_pton in plaats van inet_addr
-    if (inet_pton(AF_INET, server_ip, &server_addr.sin_addr) <= 0) {
-        fprintf(stderr, "Ongeldig server-adres: %s\n", server_ip);
-        closesocket(sock); 
-        WSACleanup(); 
+#pragma comment(lib, "ws2_32.lib")
+
+#define SERVER_IP "127.0.0.1"
+#define PORT 12345
+
+int main() {
+    WSADATA wsa;
+    SOCKET client_socket;
+    struct sockaddr_in server_addr;
+
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return 1;
+    if ((client_socket = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) return 1;
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    server_addr.sin_addr.s_addr = inet_addr(SERVER_IP);
+
+    // Verbind met de TCP-server (Connect)
+    printf("Verbinden met TCP Server...\n");
+    if (connect(client_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        printf("Kan niet verbinden met de server.\n");
         return 1;
     }
- 
-    /* ── Verbinden met server ── */
-    if (connect(sock, (struct sockaddr *)&server_addr,
-                sizeof(server_addr)) == SOCKET_ERROR) {
-        fprintf(stderr, "connect() fout: %d\n", WSAGetLastError());
-        closesocket(sock); WSACleanup(); return 1;
-    }
- 
-    printf("Verbonden met server %s:%d\n", server_ip, server_port);
-    printf("Raad het getal (1-1000000)!\n\n");
- 
-    char input[BUF_SIZE];
-    char response[BUF_SIZE];
- 
+    printf("Verbonden! Start met gokken.\n\n");
+
+    char input_buffer[256];
+    char response_buffer[256];
+
     while (1) {
-        /* ── Invoer van gebruiker ── */
         printf("Jouw gok: ");
-        fflush(stdout);
- 
-        if (fgets(input, sizeof(input), stdin) == NULL) break;
- 
-        /* Verwijder newline */
-        char *nl = strchr(input, '\n'); if (nl) *nl = '\0';
-        nl = strchr(input, '\r');       if (nl) *nl = '\0';
- 
-        if (strlen(input) == 0) continue;
- 
-        /* Valideer: is het een getal? */
-        char *end;
-        long guess = strtol(input, &end, 10);
-        if (end == input || *end != '\0') {
-            printf("  Voer een geldig geheel getal in.\n");
-            continue;
-        }
- 
-        /* ── Stuur als 32-bit integer in network-byte-order ── */
-        uint32_t net_val = htonl((uint32_t)(int)guess);
-        int sent = send(sock, (const char *)&net_val, 4, 0);
-        if (sent == SOCKET_ERROR) {
-            fprintf(stderr, "send() fout: %d\n", WSAGetLastError());
-            break;
-        }
- 
-        /* ── Ontvang antwoord van server ── */
-        memset(response, 0, sizeof(response));
-        int n = recv(sock, response, BUF_SIZE - 1, 0);
-        if (n <= 0) {
-            printf("  Server heeft verbinding verbroken.\n");
-            break;
-        }
-        response[n] = '\0';
- 
-        /* Verwijder newline voor nette weergave */
-        nl = strchr(response, '\n'); if (nl) *nl = '\0';
-        nl = strchr(response, '\r'); if (nl) *nl = '\0';
- 
-        printf("  Server: %s\n\n", response);
- 
-        /* Spel voorbij bij "Correct" */
-        if (strcmp(response, "Correct") == 0) {
-            printf("Gefeliciteerd! Je hebt het getal geraden!\n");
-            break;
+        if (fgets(input_buffer, sizeof(input_buffer), stdin) != NULL) {
+            
+            // Converteer de getypte tekst naar een integer
+            uint32_t guess = (uint32_t)atoi(input_buffer);
+            
+            // Converteer de integer van Host-Byte-Order naar Network-Byte-Order met htonl()
+            uint32_t net_guess = htonl(guess);
+
+            // Verstuur de rauwe 4 bytes
+            if (send(client_socket, (char*)&net_guess, sizeof(net_guess), 0) == SOCKET_ERROR) {
+                printf("Fout bij verzenden.\n");
+                break;
+            }
+
+            // Wacht op de string (Hoger, Lager, of Correct)
+            int bytes = recv(client_socket, response_buffer, sizeof(response_buffer) - 1, 0);
+            if (bytes > 0) {
+                response_buffer[bytes] = '\0'; // Zorg dat de string netjes stopt
+                printf("Server: %s\n\n", response_buffer);
+
+                if (strcmp(response_buffer, "Correct") == 0) {
+                    printf("Je hebt gewonnen! Verbinding wordt gesloten.\n");
+                    break;
+                }
+            } else {
+                printf("Server heeft de verbinding verbroken.\n");
+                break;
+            }
         }
     }
- 
-    closesocket(sock);
+
+    // Disconnect
+    closesocket(client_socket);
     WSACleanup();
-    printf("Verbinding gesloten.\n");
     return 0;
 }
